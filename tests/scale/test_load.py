@@ -78,13 +78,22 @@ def test_scaling_load(master_count,
         if cpu_quota != 0.0:
             _setup_quota(SHARED_ROLE, cpu_quota)
 
+    # create marathon client
+    if mom:
+        with shakedown.marathon_on_marathon(mom):
+            marathon_client = shakedown.marathon.create_client()
+    else:
+        marathon_client = shakedown.marathon.create_client()
+
     masters = ["jenkins{}".format(sdk_utils.random_string()) for _ in
                range(0, int(master_count))]
     # launch Jenkins services
     install_threads = list()
     for service_name in masters:
         t = threading.Thread(target=_install_jenkins,
-                             args=(service_name, mom, external_volume))
+                             args=(service_name,
+                                   marathon_client,
+                                   external_volume,))
         install_threads.append(t)
         t.start()
     # wait on installation threads
@@ -151,14 +160,15 @@ def _set_quota(role, cpus):
     sdk_quota.create_quota(role, cpus=cpus)
 
 
-def _install_jenkins(service_name, mom=None, external_volume=None):
+def _install_jenkins(service_name, client, external_volume=None):
     """Install Jenkins service.
 
     Args:
         service_name: Service Name or Marathon ID (same thing)
     """
     log.info("Installing jenkins '{}'".format(service_name))
-    jenkins.install(service_name, role=SHARED_ROLE, mom=mom, external_volume=None)
+    jenkins.install(service_name, client,
+                    role=SHARED_ROLE, external_volume=external_volume)
 
 
 def _cleanup_jenkins_install(service_name, mom=None):

@@ -13,15 +13,19 @@ SHORT_TIMEOUT_SECONDS = 30
 log = logging.getLogger(__name__)
 
 
-def install(service_name, role=None, mom=None, external_volume=None):
+def install(service_name, client, role=None, external_volume=None):
     """Install a Jenkins instance and set the service name to
     `service_name`. This does not wait for deployment to finish.
 
     Args:
         service_name: Unique service name
+        client: Marathon client connection
         role: The role for the service to use (default is no role)
-        mom: Marathon on Marathon instance name
+        external_volume: Enable external volumes
     """
+    def _wait_for_deployment(client, app_id):
+        return len(client.get_deployments(app_id)) == 0
+
     options = {
         "service": {
             "name": service_name
@@ -42,23 +46,11 @@ def install(service_name, role=None, mom=None, external_volume=None):
             "local-persistent-volume-size": 1024
         }
 
-    if mom:
-        # get jenkins marathon app json with desired config.
-        # this will register at `/service/<service_name>`
-        pkg_json = sdk_install.get_package_json('jenkins', None, options)
-        with marathon_on_marathon(mom):
-            c = marathon.create_client()
-            c.add_app(pkg_json)
-            time_wait(lambda: deployment_predicate(service_name),
-                      TIMEOUT_SECONDS,
-                      sleep_seconds=20)
-    else:
-        sdk_install.install(
-            'jenkins',
-            service_name,
-            0,
-            additional_options=options,
-            wait_for_deployment=False)
+    pkg_json = sdk_install.get_package_json('jenkins', None, options)
+    client.add_app(pkg_json)
+    time_wait(lambda: _wait_for_deployment(client, service_name),
+              TIMEOUT_SECONDS,
+              sleep_seconds=20)
 
 
 def uninstall(service_name, package_name='jenkins', role=None, mom=None):
