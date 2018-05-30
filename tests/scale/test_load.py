@@ -31,7 +31,7 @@ This supports the following configuration params:
 
 import logging
 import time
-from threading import Thread
+from threading import Thread, Lock
 from typing import List, Set
 from xml.etree import ElementTree
 
@@ -49,6 +49,8 @@ SHARED_ROLE = "jenkins-role"
 # initial timeout waiting on deployments
 DEPLOY_TIMEOUT = 15 * 60  # 15 mins
 JOB_RUN_TIMEOUT = 10 * 60  # 10 mins
+
+LOCK = Lock()
 
 
 class ResultThread(Thread):
@@ -102,17 +104,24 @@ def test_scaling_load(master_count,
         mom: Marathon on Marathon instance name
         external_volume: External volume on rexray (true) or local volume (false)
     """
-    with shakedown.marathon_on_marathon(mom):
-        if cpu_quota is not 0.0:
+    if mom and cpu_quota != 0.0:
+        with shakedown.marathon_on_marathon(mom):
             _setup_quota(SHARED_ROLE, cpu_quota)
+
+    # create marathon client
+    if mom:
+        with shakedown.marathon_on_marathon(mom):
+            marathon_client = shakedown.marathon.create_client()
+    else:
+        marathon_client = shakedown.marathon.create_client()
 
     masters = ["jenkins{}".format(sdk_utils.random_string()) for _ in
                range(0, int(master_count))]
     # launch Jenkins services
     install_threads = _spawn_threads(masters,
                                      _install_jenkins,
+                                     client=marathon_client,
                                      external_volume=external_volume,
-                                     mom=mom,
                                      daemon=True)
     thread_failures = _wait_and_get_failures(install_threads,
                                              timeout=DEPLOY_TIMEOUT)
@@ -205,18 +214,28 @@ def _spawn_threads(names, target, daemon=False, **kwargs) -> List[ResultThread]:
     return thread_list
 
 
-def _install_jenkins(service_name, mom=None, external_volume=None):
+def _install_jenkins(service_name,
+                     client=None,
+                     external_volume=None):
     """Install Jenkins service.
 
     Args:
         service_name: Service Name or Marathon ID (same thing)
-        mom: Marathon on Marathon instance name
+        client: Marathon client connection
         external_volume: Enable external volumes
     """
+    def _wait_for_deployment(app_id, client):
+        with LOCK:
+            res = len(client.get_deployments(app_id)) == 0
+        return res
+
     log.info("Installing jenkins '{}'".format(service_name))
     try:
-        jenkins.install(service_name, role=SHARED_ROLE, mom=mom,
-                        external_volume=external_volume)
+        jenkins.install(service_name,
+                        client,
+                        role=SHARED_ROLE,
+                        external_volume=external_volume,
+                        fn=_wait_for_deployment)
     except Exception as e:
         log.warning("Error encountered while installing Jenkins: {}".format(e))
         raise e
